@@ -1,4 +1,4 @@
-package com.salest.salestemperature.v3.spark.SalesLogAnalysisSparkApp;
+package com.salest.salestemperature.v3.spark;
 
 import java.io.Serializable;
 import java.text.SimpleDateFormat;
@@ -59,16 +59,17 @@ public class SalesLogAnalysisSparkApp
 	
 	private static JavaPairRDD<String,String> menuInfoRDD;
 
-	private static JavaRDD<SalesLogRecord> todayWholeSalesLogRDD;
-	
     private static JavaPairRDD<String,Long> sumProductTotalSalesOfTodayRDD;
  
     private static SimpleDateFormat dateFormatYearMonthDay = new SimpleDateFormat("yyyy-MM-dd");
         
 	public static void prepareContexts(){
-	   	sparkConf = new SparkConf().setAppName("SalesLogAnalysisSparkApp").setMaster("yarn-client");
+	   	sparkConf = new SparkConf().setAppName("SalesLogAnalysisSparkApp")
+	   			.setMaster("yarn-client");
+	   			//.setMaster("local[2]");
+	   			//.setMaster("spark://salest-master-server:7077");		//.setMaster("yarn-client");
 		jctx = prepareContext(sparkConf);
-		jsctx = prepareStreamingContext(jctx, 10);
+		jsctx = prepareStreamingContext(jctx, 5);
 		jsctx.checkpoint(HDFS_CHECKPOINT_DIR);
 	}
 	
@@ -115,42 +116,6 @@ public class SalesLogAnalysisSparkApp
 				Tuple2<String, Long> output = new Tuple2<String, Long>(key,sum);
 
 				return Optional.of(output);
-				
-				
-				/*
-				String currentDate = SalesLogRecord.parseTrDateFromRecord(current.get()._1);
-				String stateDate = SalesLogRecord.parseTrDateFromRecord((state.exists() ? state.get()._1 : current.get()._1));
-				
-				Date dateCurrent = dateFormatYearMonthDay.parse(currentDate);
-				Date dateState = dateFormatYearMonthDay.parse(stateDate);
-				*/
-				
-				/*
-				Long sum = 0L;
-				Tuple2<String, Long> output;
-	
-				if(dateCurrent.getTime() > dateState.getTime()){
-					sum = current.get()._2;
-					output = new Tuple2<String, Long>(current.get()._1,sum);
-					state.update(new Tuple2<String,Long>(current.get()._1,sum));
-					
-				} else if(dateCurrent.getTime() == dateState.getTime()){
-					sum = current.get()._2 + (state.exists() ? state.get()._2 : 0L);
-					output = new Tuple2<String, Long>(current.get()._1,sum);
-					state.update(new Tuple2<String,Long>(current.get()._1,sum));
-					
-				} else {
-					sum = (state.exists() ? state.get()._2 : 0L);
-					output = new Tuple2<String, Long>(state.get()._1,sum);
-					state.update(new Tuple2<String,Long>(state.get()._1,sum));
-				}
-		
-				sum = ((current.isPresent()) ? current.get()._2 : 0L) + (state.exists() ? state.get()._2 : 0L);
-				output = new Tuple2<String, Long>(((current.isPresent()) ? current.get()._1 : ""),sum);
-				state.update(new Tuple2<String,Long>(((current.isPresent()) ? current.get()._1 : ""),sum));
-				
-				return output;
-				*/
 			}
 	};
 	
@@ -195,8 +160,11 @@ public class SalesLogAnalysisSparkApp
 		// Return Pair("MsgId","ValidLogMessage")
 	    JavaPairDStream<String,String> messagesDStream = pairDStream.mapToPair(new PairFunction<Tuple2<String, String>, String, String>() {
 	        public Tuple2<String, String> call(Tuple2<String, String> tuple) {
-	        	String[] columes = tuple._2.split("[^0-9a-zA-Z-:,]+");
 	        	
+	        	//System.out.println("Expected [MsgId,ValidLogMessage]: " + tuple._2);
+	        	
+	        	String[] columes = tuple._2.split("[^0-9a-zA-Z-:,]+");
+
 	        	String msgUUID = columes[columes.length-2];
 	        	String salesRecord = "";
 	        	
@@ -223,13 +191,10 @@ public class SalesLogAnalysisSparkApp
 	    
 	    productCodeOthersDStream.foreachRDD(new Function<JavaPairRDD<String,String>, Void>(){
 	    	public Void call(JavaPairRDD<String,String> rddPair) throws Exception {
-	    		// <productCode,<originalMessage,categoryName>>
-	    		
+
 	    		JavaPairRDD<String,Tuple2<String,String>> menuInfoWithCate = menuInfoRDD.join(rddPair);
-	    		
 	    		JavaPairRDD<Tuple2<String,String>,Long> totalAmountByCategory =  reduceByProductCodeTotalAmountPair(menuInfoWithCate);
-	    		//JavaPairRDD<String,Long> totalAmountByCategory = reduceByProductCodeTotalAmountPair(menuInfoWithCate);  		
-	    		
+
 	    		totalAmountByCategory.foreachPartition(new VoidFunction<Iterator<Tuple2<Tuple2<String,String>,Long>>>(){
 					public void call(Iterator<Tuple2<Tuple2<String,String>, Long>> iter) throws Exception {
 						// TODO Auto-generated method stub
@@ -239,7 +204,8 @@ public class SalesLogAnalysisSparkApp
 						    RedisClient redisClient = new RedisClient();
 						    redisClient.initialize();
 						    
-						    String rediskey = RedisClient.KEY_PREFIX_SALESLOG_TOTALAMOUNT_OF_CATE + cateTotalAmount._1._1 + ":" + cateTotalAmount._1._2;
+						    String rediskey = RedisClient.KEY_PREFIX_SALESLOG_TOTALAMOUNT + RedisClient.KEY_MIDFIX_CATEGORY
+						    		+ cateTotalAmount._1._1 + ":" + cateTotalAmount._1._2;
 						    
 						    String readValue = redisClient.readValueByKey(rediskey);
 
@@ -247,7 +213,7 @@ public class SalesLogAnalysisSparkApp
 							 
 							readValue = redisClient.readValueByKey(rediskey);
 
-							System.out.println("\nRead Value After : " + rediskey + " , " + readValue);
+							//System.out.println("[SalesCount By Category] : " + rediskey + " , " + readValue);
 							
 							redisClient.uninitialize();
 						}
@@ -258,22 +224,39 @@ public class SalesLogAnalysisSparkApp
 	    	}
 	    });
 
-/*
-	    JavaMapWithStateDStream<String,Long,Long,Tuple2<String, Long>> stateDstream = updateTotalAmountOfTodayByProduct(messagesDStream);
-	  
-	    stateDstream.foreachRDD(new Function<JavaRDD<Tuple2<String,Long>>,Void>(){
+
+	    JavaMapWithStateDStream<String,Long,Long,Tuple2<String, Long>> stateDStream = updateTotalAmountOfTodayByProduct(messagesDStream);
+
+	    stateDStream.foreachRDD(new Function<JavaRDD<Tuple2<String,Long>>,Void>(){
 			public Void call(JavaRDD<Tuple2<String, Long>> rdd) throws Exception {
-				// TODO Auto-generated method stub			
-				List<Tuple2<String,Long>> tuples = rdd.collect();
-				for(Tuple2<String,Long> tuple : tuples){
-					System.out.println("[ProductCode]: " + tuple._1 + "     [Count]: " + tuple._2);
-				}
+				rdd.foreachPartition(new VoidFunction<Iterator<Tuple2<String,Long>>>(){
+					public void call(Iterator<Tuple2<String, Long>> iter) throws Exception {
+						// TODO Auto-generated method stub
+						while(iter.hasNext()){
+							Tuple2<String,Long> tuple = iter.next();
+
+							RedisClient redisClient = new RedisClient();
+						    redisClient.initialize();
+						    
+						    String rediskey = RedisClient.KEY_PREFIX_SALESLOG_TOTALAMOUNT + RedisClient.KEY_MIDFIX_PRODUCT + tuple._1;
+						    redisClient.createOrUpdateValueByKey(rediskey, String.valueOf(tuple._2));
+
+							String readValue = redisClient.readValueByKey(rediskey);
+
+							//System.out.println("[SalesCount By Product] : " + rediskey + " , " + readValue);
+							
+							redisClient.uninitialize();
+						}
+					}
+				});
 				return null;
 			}
 	    });
-*/	    
+
+	    
 	    //stateDstream.print();
 	}
+	
 	
 	private static JavaPairRDD<Tuple2<String,String>,Long> reduceByProductCodeTotalAmountPair(JavaPairRDD<String,Tuple2<String,String>> inputRDD){
 		
@@ -305,9 +288,9 @@ public class SalesLogAnalysisSparkApp
 	    			String trDate = SalesLogRecord.parseTrDateFromRecord(tuple._2);
 	    			String productCode = SalesLogRecord.parseProductCodeFromRecord(tuple._2);
 	    			Long salesAmount = Long.parseLong(SalesLogRecord.parseSalesAmountFromRecord(tuple._2));
-	    			return new Tuple2(trDate + "," + productCode, salesAmount);
+	    			return new Tuple2(trDate + ":" + productCode, salesAmount);
 	    		}
-	    	}).mapWithState(StateSpec.function(mappingFunc).timeout(Durations.seconds(10)).initialState(sumProductTotalSalesOfTodayRDD));   
+	    	}).mapWithState(StateSpec.function(mappingFunc).timeout(Durations.minutes(60*24)).initialState(sumProductTotalSalesOfTodayRDD));   
 	}
 	
 	public static void processSalesLogMessages(){
@@ -332,14 +315,15 @@ public class SalesLogAnalysisSparkApp
 		// TODO Auto-generated method stub
 		
 		// Windows Env workaround
-		System.setProperty("hadoop.home.dir", "c:\\\\winutil\\\\" );
+		//System.setProperty("hadoop.home.dir", "c:\\\\winutil\\\\" );
 		
 		prepareContexts();		
 		processSalesLogMessages();
+	
 		
-	  	ExecutorService executor = Executors.newFixedThreadPool(1);
-		executor.execute(new SalesLogWriterRunner());
-			
+	  	//ExecutorService executor = Executors.newFixedThreadPool(1);
+		//executor.execute(new SalesLogWriterRunner());
+		
 			
 		startSparkContexts();
 			

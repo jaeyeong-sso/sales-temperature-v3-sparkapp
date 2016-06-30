@@ -1,4 +1,4 @@
-package com.salest.salestemperature.v3.spark.SalesLogAnalysisSparkApp;
+package com.salest.salestemperature.v3.spark;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
