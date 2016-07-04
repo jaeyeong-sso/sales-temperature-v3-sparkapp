@@ -61,13 +61,12 @@ public class SalesLogAnalysisSparkApp
 
     private static JavaPairRDD<String,Long> sumProductTotalSalesOfTodayRDD;
  
-    private static SimpleDateFormat dateFormatYearMonthDay = new SimpleDateFormat("yyyy-MM-dd");
+    //private static SimpleDateFormat dateFormatYearMonthDay = new SimpleDateFormat("yyyy-MM-dd");
         
+	private static Logger logger = Logger.getLogger(SalesLogAnalysisSparkApp.class);
+	
 	public static void prepareContexts(){
-	   	sparkConf = new SparkConf().setAppName("SalesLogAnalysisSparkApp")
-	   			.setMaster("yarn-client");
-	   			//.setMaster("local[2]");
-	   			//.setMaster("spark://salest-master-server:7077");		//.setMaster("yarn-client");
+	   	sparkConf = new SparkConf().setAppName("SalesLogAnalysisSparkApp").setMaster("yarn-cluster");
 		jctx = prepareContext(sparkConf);
 		jsctx = prepareStreamingContext(jctx, 5);
 		jsctx.checkpoint(HDFS_CHECKPOINT_DIR);
@@ -125,7 +124,7 @@ public class SalesLogAnalysisSparkApp
 	
 	private static JavaPairRDD<String,String> loadMenuInfoRDD(JavaSparkContext jctx){
 
-		JavaRDD<String> inputRDD = jctx.textFile("hdfs://namenode:9000/salest/menu_data/menu_code_out.csv");
+		JavaRDD<String> inputRDD = jctx.textFile("hdfs://namenode:9000/salest/menu_data/menu_info.csv");
 		
 		JavaPairRDD<String,String> productCodeCategoryPairRDD = inputRDD.mapToPair(new PairFunction<String,String,String>(){
 			public Tuple2<String, String> call(String line) throws Exception {
@@ -156,15 +155,21 @@ public class SalesLogAnalysisSparkApp
 	}
 	
 	private static void extractVaildSalesLogMessageDStream (JavaPairDStream<String, String> pairDStream, final JavaPairRDD<String,String> menuInfoRDD){
- 
+ 	
 		// Return Pair("MsgId","ValidLogMessage")
+		/*
 	    JavaPairDStream<String,String> messagesDStream = pairDStream.mapToPair(new PairFunction<Tuple2<String, String>, String, String>() {
 	        public Tuple2<String, String> call(Tuple2<String, String> tuple) {
 	        	
-	        	//System.out.println("Expected [MsgId,ValidLogMessage]: " + tuple._2);
-	        	
+	    		logger.error("Expected [tuple._1,tuple._2]: " + tuple._1 + " / " + tuple._2);
+	    		
 	        	String[] columes = tuple._2.split("[^0-9a-zA-Z-:,]+");
 
+	    		logger.error("Expected [Count of columes By split]: " + columes.length);
+	        	for(String field : columes){
+	        		logger.error("Expected [columes]: " + field);
+	        	}
+	        		
 	        	String msgUUID = columes[columes.length-2];
 	        	String salesRecord = "";
 	        	
@@ -173,6 +178,7 @@ public class SalesLogAnalysisSparkApp
 	    			salesRecord = matcher.group(0);
 	    		}
 	    		//System.out.println("[msgUUID]: " + msgUUID + "     [salesRecord]: " + salesRecord);
+
 				return new Tuple2<String, String>(msgUUID, salesRecord);
 	        }
 	    }).reduceByKey(new Function2<String, String, String>() {
@@ -180,9 +186,9 @@ public class SalesLogAnalysisSparkApp
 	    		return firstSalesRecord;
 	    	}
 	    });
-	    
+	    */
 
-	    JavaPairDStream<String,String> productCodeOthersDStream = messagesDStream.mapToPair(new PairFunction<Tuple2<String, String>,String,String>(){
+	    JavaPairDStream<String,String> productCodeOthersDStream = pairDStream.mapToPair(new PairFunction<Tuple2<String, String>,String,String>(){
 			public Tuple2<String, String> call(Tuple2<String, String> tuple) throws Exception {
 				// TODO Auto-generated method stub
 				return new Tuple2<String, String>(SalesLogRecord.parseProductCodeFromRecord(tuple._2),tuple._2);
@@ -207,12 +213,12 @@ public class SalesLogAnalysisSparkApp
 						    String rediskey = RedisClient.KEY_PREFIX_SALESLOG_TOTALAMOUNT + RedisClient.KEY_MIDFIX_CATEGORY
 						    		+ cateTotalAmount._1._1 + ":" + cateTotalAmount._1._2;
 						    
-						    String readValue = redisClient.readValueByKey(rediskey);
-
 						    redisClient.createOrIncrLongValue(rediskey, cateTotalAmount._2);
 							 
-							readValue = redisClient.readValueByKey(rediskey);
-
+							String readValue = redisClient.readValueByKey(rediskey);
+							
+							logger.error(String.format("[Redis Updated] KEY: %s, VALUE: %s",rediskey,readValue));
+							
 							//System.out.println("[SalesCount By Category] : " + rediskey + " , " + readValue);
 							
 							redisClient.uninitialize();
@@ -225,7 +231,7 @@ public class SalesLogAnalysisSparkApp
 	    });
 
 
-	    JavaMapWithStateDStream<String,Long,Long,Tuple2<String, Long>> stateDStream = updateTotalAmountOfTodayByProduct(messagesDStream);
+	    JavaMapWithStateDStream<String,Long,Long,Tuple2<String, Long>> stateDStream = updateTotalAmountOfTodayByProduct(pairDStream);
 
 	    stateDStream.foreachRDD(new Function<JavaRDD<Tuple2<String,Long>>,Void>(){
 			public Void call(JavaRDD<Tuple2<String, Long>> rdd) throws Exception {
@@ -317,6 +323,9 @@ public class SalesLogAnalysisSparkApp
 		// Windows Env workaround
 		//System.setProperty("hadoop.home.dir", "c:\\\\winutil\\\\" );
 		
+		logger.error("[Start] SalesLogAnalysisSparkApp...");
+		
+		
 		prepareContexts();		
 		processSalesLogMessages();
 	
@@ -327,5 +336,6 @@ public class SalesLogAnalysisSparkApp
 			
 		startSparkContexts();
 			
+		logger.error("[End] SalesLogAnalysisSparkApp...");
 	}
 }
